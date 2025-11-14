@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <Protobuf_OutputDir>./</Protobuf_OutputDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="..\..\.dockerignore">
+      <Link>.dockerignore</Link>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="../prime.proto" GrpcServices="None" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Confluent.Kafka" />
+    <PackageReference Include="Google.Protobuf"  />
+    <PackageReference Include="Grpc.Tools" >
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Serilog"  />
+    <PackageReference Include="Serilog.Sinks.Console"  />
+    <PackageReference Include="OpenTelemetry"  />
+    <PackageReference Include="OpenTelemetry.Exporter.Console"  />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting"  />
+  </ItemGroup>
+</Project>
