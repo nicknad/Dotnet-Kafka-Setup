@@ -9,4 +9,7 @@
     <Project Path="src/KafkaPipeline.Core/KafkaPipeline.Core.csproj" />
     <Project Path="src/KafkaProducerApp/KafkaProducerApp.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/KafkaPipeline.Tests/KafkaPipeline.Tests.csproj" />
+  </Folder>
 </Solution>
