@@ -106,13 +106,6 @@ The GitHub Actions workflow restores, builds and tests the solution on every pus
 - **Trace context in headers**: W3C `traceparent` is injected/extracted manually, keeping the
   pipeline traceable end to end without a broker plugin.
 
-## Possible next steps
-
-- Integration tests with [Testcontainers for .NET](https://dotnet.testcontainers.org/)
-- Dead-letter topic and retry policy for poison messages
-- OTLP collector + dashboards in Compose
-- Schema registry with Protobuf and schema-evolution tests
-
 ## Third-party licenses
 
 See [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md).
