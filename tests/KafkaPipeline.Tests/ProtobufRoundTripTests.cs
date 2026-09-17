@@ -9,26 +9,47 @@ public sealed class ProtobufRoundTripTests
 {
     private static readonly SerializationContext Context = new(MessageComponentType.Value, "primes-topic");
 
-    [Fact]
-    public void Serialize_ThenDeserialize_RoundTripsMessage()
+    private static PrimeNumber CreateMessage() => new()
     {
-        var serializer = new ProtobufSerializer<PrimeNumber>();
-        var deserializer = new ProtobufDeserializer<PrimeNumber>();
-        var original = new PrimeNumber { Value = 7919, Timestamp = 1_700_000_000_000 };
+        Value = 7919,
+        Timestamp = 1_700_000_000_000
+    };
 
-        var bytes = serializer.Serialize(original, Context);
-        var roundTripped = deserializer.Deserialize(bytes, isNull: false, Context);
+    private static byte[] Serialize(PrimeNumber message) =>
+        new ProtobufSerializer<PrimeNumber>().Serialize(message, Context);
 
-        Assert.Equal(original, roundTripped);
+    [Fact]
+    public void Serialize_ThenParse_RoundTripsMessage()
+    {
+        var original = CreateMessage();
+
+        var bytes = Serialize(original);
+        var parsed = ProtobufMessageParser.TryParse<PrimeNumber>(bytes, out var message, out var error);
+
+        Assert.True(parsed);
+        Assert.Null(error);
+        Assert.Equal(original, message);
     }
 
     [Fact]
-    public void Deserialize_NullPayload_ReturnsNull()
+    public void Parse_GarbageBytes_FailsWithReason()
     {
-        var deserializer = new ProtobufDeserializer<PrimeNumber>();
+        var parsed = ProtobufMessageParser.TryParse<PrimeNumber>([0xFF, 0xFF, 0xFF], out var message, out var error);
 
-        var result = deserializer.Deserialize(ReadOnlySpan<byte>.Empty, isNull: true, Context);
+        Assert.False(parsed);
+        Assert.Null(message);
+        Assert.False(string.IsNullOrWhiteSpace(error));
+    }
 
-        Assert.Null(result);
+    [Fact]
+    public void Parse_TruncatedMessage_Fails()
+    {
+        var bytes = Serialize(CreateMessage());
+
+        var parsed = ProtobufMessageParser.TryParse<PrimeNumber>(bytes.AsSpan(0, bytes.Length - 1), out var message, out var error);
+
+        Assert.False(parsed);
+        Assert.Null(message);
+        Assert.False(string.IsNullOrWhiteSpace(error));
     }
 }
