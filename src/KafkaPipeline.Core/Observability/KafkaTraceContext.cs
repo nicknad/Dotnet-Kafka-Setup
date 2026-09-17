@@ -19,7 +19,6 @@ public static class KafkaTraceContext
         var flags = activity.ActivityTraceFlags.HasFlag(ActivityTraceFlags.Recorded) ? "01" : "00";
         var traceParent = $"00-{activity.TraceId}-{activity.SpanId}-{flags}";
 
-        headers.Remove(TraceParentHeader);
         headers.Add(TraceParentHeader, Encoding.UTF8.GetBytes(traceParent));
     }
 

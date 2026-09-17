@@ -29,9 +29,6 @@ jobs:
       - name: Test
         run: dotnet test KafkaPipeline.slnx --no-build --configuration Release
 
-      - name: Audit transitive dependencies for vulnerabilities
-        run: dotnet package list --project KafkaPipeline.slnx --vulnerable --include-transitive --no-restore
-
       - name: Restore tools
         run: dotnet tool restore
 

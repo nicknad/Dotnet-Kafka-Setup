@@ -21,16 +21,10 @@ internal sealed class ProducerWorker(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var kafka = options.Value;
-        var config = new ProducerConfig
-        {
-            BootstrapServers = kafka.BootstrapServers,
-            Acks = Acks.All,
-            EnableIdempotence = true
-        };
 
-        using var producer = new ProducerBuilder<Null, PrimeNumber>(config)
+        using var producer = new ProducerBuilder<Null, PrimeNumber>(KafkaClients.IdempotentProducerConfig(kafka.BootstrapServers))
             .SetValueSerializer(new ProtobufSerializer<PrimeNumber>())
-            .SetErrorHandler((_, error) => logger.LogError("Kafka error: {Reason} ({Code})", error.Reason, error.Code))
+            .SetErrorHandler((_, error) => logger.LogKafkaError(error))
             .Build();
 
         logger.LogInformation("Publishing primes to {Topic} via {BootstrapServers}", kafka.Topic, kafka.BootstrapServers);
@@ -65,9 +59,8 @@ internal sealed class ProducerWorker(
         int value,
         CancellationToken cancellationToken)
     {
-        using var activity = ActivitySources.Producer.StartActivity("publish prime", ActivityKind.Producer);
-        activity?.SetTag("messaging.system", "kafka");
-        activity?.SetTag("messaging.destination.name", topic);
+        using var activity = ActivitySources.Producer.StartKafkaActivity(
+            "publish prime", ActivityKind.Producer, parentHeaders: null, destinationTopic: topic);
         activity?.SetTag("prime.value", value);
 
         var headers = new Headers();

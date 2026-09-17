@@ -2,7 +2,6 @@
   <Folder Name="/Solution Items/">
     <File Path="compose.yaml" />
     <File Path="README.md" />
-    <File Path="THIRD-PARTY-LICENSES.md" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/KafkaConsumerApp/KafkaConsumerApp.csproj" />

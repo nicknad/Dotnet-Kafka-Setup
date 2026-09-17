@@ -6,16 +6,19 @@ A small, production-shaped example of a Kafka producer/consumer pipeline built o
 (.NET 10, C# 14, Confluent.Kafka, Protobuf, OpenTelemetry, Serilog, Generic Host).
 
 The producer generates primes below 10,000 and publishes protobuf-encoded `PrimeNumber` messages to
-`primes-topic`. The consumer processes them in the `prime-consumer-group`, commits offsets manually
-(at-least-once), and continues tracing the work using the trace context propagated through Kafka
-message headers.
+`primes-topic`. The consumer processes them in the `prime-consumer-group`, commits offsets manually in
+batches (at-least-once), forwards malformed payloads to a dead-letter topic, and continues tracing the
+work using the trace context propagated through Kafka message headers.
 
 ## What this demonstrates
 
 - **Generic Host, dependency injection and typed options** with validation at startup
 - **Configuration via `appsettings.json` + environment variables** (`Kafka__BootstrapServers`, ...)
-- **Confluent.Kafka client configuration**: idempotent producer (`Acks.All`), manual consumer commits,
-  rebalance handlers, tombstone handling
+- **Confluent.Kafka client configuration**: idempotent producer (`Acks.All`), manual consumer commits
+  batched by count/interval (plus on shutdown and rebalance), rebalance handlers, tombstone handling
+- **Poison-message handling**: the consumer reads raw bytes, parses Protobuf explicitly, and forwards
+  malformed payloads (original bytes + headers + failure metadata) to a dead-letter topic instead of
+  crashing
 - **Protobuf contract in a shared library** generated once and referenced by both apps
 - **Graceful shutdown**: `BackgroundService` + `CancellationToken`, producer flush on exit
 - **Distributed tracing across the async boundary**: W3C `traceparent` injected into Kafka headers,
@@ -32,7 +35,8 @@ message headers.
 ```mermaid
 flowchart LR
     P[KafkaProducerApp<br/>BackgroundService] -->|PrimeNumber<br/>protobuf + traceparent| T[(primes-topic<br/>3 partitions)]
-    T --> C[KafkaConsumerApp<br/>consumer group + manual commit]
+    T --> C[KafkaConsumerApp<br/>consumer group + batched commits]
+    C -->|malformed payload<br/>+ dlq headers| DL[(primes-topic.dlq<br/>3 partitions)]
 ```
 
 ## Prerequisites
@@ -48,9 +52,9 @@ cd Dotnet-Kafka-Setup
 docker compose up --build
 ```
 
-Compose starts the broker, waits for its healthcheck, creates `primes-topic` if needed, then starts
-the consumer and producer. The producer publishes for roughly 100 seconds and exits; the consumer
-keeps running.
+Compose starts the broker, waits for its healthcheck, creates `primes-topic` and `primes-topic.dlq`
+if needed, then starts the consumer and producer. The producer publishes for roughly 100 seconds and
+exits; the consumer keeps running (and is restarted by Compose if it ever stops unexpectedly).
 
 ## Running the apps locally
 
@@ -71,6 +75,9 @@ dotnet run --project src/KafkaProducerApp
 | `Kafka:BootstrapServers` | `localhost:9092` | Broker endpoint (comma-separated list supported) |
 | `Kafka:Topic` | `primes-topic` | Topic produced to / consumed from |
 | `Kafka:ConsumerGroup` | `prime-consumer-group` | Consumer group (consumer only) |
+| `Kafka:DeadLetterTopic` | `<Topic>.dlq` | Override for the dead-letter topic (consumer only) |
+| `Kafka:CommitBatchSize` | `100` | Commit offsets after this many handled messages (consumer only) |
+| `Kafka:CommitInterval` | `00:00:05` | ...or after this long, whichever comes first (consumer only) |
 | `Otlp:Endpoint` | *(empty)* | If set, traces are exported via OTLP; otherwise the console exporter is used |
 
 Any setting can be overridden with environment variables using the standard .NET convention,
@@ -79,9 +86,10 @@ e.g. `Kafka__BootstrapServers=kafka:29092`. Options are validated on startup.
 ## Project layout
 
 ```
-src/KafkaPipeline.Core       protobuf contract, serializers, options, tracing helpers
+src/KafkaPipeline.Core       protobuf contract, serializer/parser, options, tracing and hosting helpers
 src/KafkaProducerApp         producer worker + configuration
 src/KafkaConsumerApp         consumer worker + configuration
+src/Dockerfile               one parameterized image build for both apps (`--build-arg APP=...`)
 tests/KafkaPipeline.Tests    unit tests for prime logic, serialization and trace propagation
 compose.yaml                 single-node KRaft Kafka, topic init, both apps
 ```
@@ -123,8 +131,15 @@ specific advisory temporarily, suppress it with `NoWarn` and a comment explainin
 
 - **Raw Confluent.Kafka instead of a framework** (MassTransit/Wolverine): this example stays close to
   the protocol so producer/consumer configuration is explicit and visible.
-- **At-least-once delivery**: offsets are committed after processing; duplicates are possible if the
-  process dies before a commit, so consumers must be idempotent.
+- **At-least-once delivery**: offsets are committed after processing — every `CommitBatchSize` handled
+  messages or `CommitInterval`, whichever comes first, and always on shutdown and partition revocation.
+  Duplicates are possible if the process dies before a commit, so consumers must be idempotent.
+- **Dead-letter instead of crashing**: the consumer consumes raw bytes and parses Protobuf explicitly,
+  because a typed deserializer throws inside `Consume` before a result exists — no payload, offset or
+  headers to act on. A malformed payload is forwarded with its original bytes, original headers
+  (including `traceparent`) and `dlq.*` metadata headers to `Kafka:DeadLetterTopic`, and its offset is
+  committed only after that write succeeds; if the write fails, the worker stops rather than skip the
+  message. Retry topics with backoff are out of scope — parse failures are permanent.
 - **No schema registry**: the protobuf contract is compiled into a shared library. In production,
   pairing Protobuf with a schema registry (and a magic-byte framing convention) makes schema
   evolution safe across independent deployments.
@@ -135,4 +150,6 @@ specific advisory temporarily, suppress it with `NoWarn` and a comment explainin
 
 ## Third-party licenses
 
-See [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md).
+Every dependency and its license are listed in the CycloneDX SBOM that CI generates on each build
+(see [Supply-chain policy](#supply-chain-policy)), and PackageGuard fails the build on any license
+outside the allow list in [`packageguard.config.json`](packageguard.config.json).

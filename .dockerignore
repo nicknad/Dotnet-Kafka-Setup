@@ -3,9 +3,13 @@
 **/.idea
 **/.vs
 **/.vscode
-**/*.*proj.user
 **/bin
 **/Dockerfile*
 **/obj
-**/secrets.dev.yaml
-**/values.dev.yaml
+.github
+.config
+artifacts
+tests
+*.md
+*.slnx
+packageguard.config.json

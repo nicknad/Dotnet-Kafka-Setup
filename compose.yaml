@@ -32,12 +32,14 @@
         condition: service_healthy
     entrypoint: ["/bin/bash", "-c"]
     command:
-      - "kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic primes-topic --partitions 3 --replication-factor 1"
+      - "for topic in primes-topic primes-topic.dlq; do kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic $$topic --partitions 3 --replication-factor 1; done"
 
   kafkaproducerapp:
     build:
       context: .
-      dockerfile: src/KafkaProducerApp/Dockerfile
+      dockerfile: src/Dockerfile
+      args:
+        APP: KafkaProducerApp
     depends_on:
       kafka-init:
         condition: service_completed_successfully
@@ -47,9 +49,12 @@
   kafkaconsumerapp:
     build:
       context: .
-      dockerfile: src/KafkaConsumerApp/Dockerfile
+      dockerfile: src/Dockerfile
+      args:
+        APP: KafkaConsumerApp
     depends_on:
       kafka-init:
         condition: service_completed_successfully
     environment:
       Kafka__BootstrapServers: kafka:29092
+    restart: unless-stopped
