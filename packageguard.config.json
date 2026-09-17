@@ -1,0 +1,26 @@
+{
+  "settings": {
+    "allow": {
+      "prerelease": false,
+      "licenses": [
+        "MIT",
+        "Apache-2.0",
+        "BSD-2-Clause",
+        "BSD-3-Clause",
+        "ISC",
+        "MS-PL",
+        "Microsoft .NET Library License"
+      ]
+    },
+    "deny": {
+      "licenses": [
+        "GPL-2.0-only",
+        "GPL-3.0-only",
+        "AGPL-3.0-only",
+        "SSPL-1.0",
+        "BUSL-1.1"
+      ],
+      "packages": []
+    }
+  }
+}

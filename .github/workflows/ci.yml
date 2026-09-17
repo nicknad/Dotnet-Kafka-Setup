@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build-test:
     runs-on: ubuntu-latest
@@ -25,3 +28,22 @@ jobs:
 
       - name: Test
         run: dotnet test KafkaPipeline.slnx --no-build --configuration Release
+
+      - name: Audit transitive dependencies for vulnerabilities
+        run: dotnet package list --project KafkaPipeline.slnx --vulnerable --include-transitive --no-restore
+
+      - name: Restore tools
+        run: dotnet tool restore
+
+      - name: Enforce dependency policy and generate SBOM
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p artifacts
+          dotnet tool run packageguard -- KafkaPipeline.slnx --skip-restore --github-api-key "$GITHUB_TOKEN" --sbom cyclonedx --sbom-output artifacts/sbom.cyclonedx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v7
+        with:
+          name: sbom
+          path: artifacts/sbom.cyclonedx.json

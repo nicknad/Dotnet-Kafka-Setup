@@ -24,6 +24,8 @@ message headers.
 - **KRaft-mode Kafka in Docker Compose** with healthcheck, explicit topic provisioning, and separate
   internal/external listeners so containers and host processes can both connect
 - **Unit tests and CI** (GitHub Actions), central package management, pinned broker image
+- **Supply-chain checks**: NuGet audit with high/critical advisories as errors, PackageGuard license
+  and package policy, CycloneDX SBOM published by CI
 
 ## Architecture
 
@@ -91,6 +93,31 @@ dotnet test KafkaPipeline.slnx
 ```
 
 The GitHub Actions workflow restores, builds and tests the solution on every push and pull request.
+
+## Supply-chain policy
+
+Dependency policy is enforced mechanically instead of reviewed after the fact:
+
+- **Vulnerabilities** — `NuGetAudit` runs on every restore across direct and transitive packages.
+  [`Directory.Build.props`](Directory.Build.props) sets the audit level to `moderate` and turns
+  high (`NU1903`) and critical (`NU1904`) advisories into errors, so a restore/build fails instead of
+  shipping a known-vulnerable dependency.
+- **Licenses and banned packages** — [PackageGuard](https://packageguard.org/) enforces the allow/deny
+  lists in [`packageguard.config.json`](packageguard.config.json). The tool is pinned in
+  [`.config/dotnet-tools.json`](.config/dotnet-tools.json), so the same version runs locally and in CI.
+- **SBOM** — CI emits a CycloneDX SBOM for the resolved dependency graph and uploads it as a build
+  artifact.
+
+```bash
+dotnet restore KafkaPipeline.slnx                # vulnerability audit runs automatically
+dotnet package list --project KafkaPipeline.slnx --vulnerable --include-transitive
+dotnet tool restore
+dotnet tool run packageguard -- KafkaPipeline.slnx --skip-restore \
+  --sbom cyclonedx --sbom-output artifacts/sbom.cyclonedx.json
+```
+
+To allow a new license or pin a package version, update `packageguard.config.json`. To accept a
+specific advisory temporarily, suppress it with `NoWarn` and a comment explaining why.
 
 ## Design decisions
 
