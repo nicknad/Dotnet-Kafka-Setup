@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "isRoot": true,
+  "tools": {
+    "packageguard": {
+      "version": "2.6.0",
+      "commands": [
+        "packageguard"
+      ]
+    }
+  }
+}
