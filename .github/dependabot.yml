@@ -22,7 +22,7 @@ updates:
           - "patch"
 
   - package-ecosystem: "docker"
-    directory: "/"
+    directory: "/src"
     schedule:
       interval: "weekly"
     groups:
