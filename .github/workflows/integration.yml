@@ -22,7 +22,14 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Update WSL
-        run: wsl --update
+        shell: pwsh
+        run: |
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            wsl --update
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Start-Sleep -Seconds 10
+          }
+          Write-Warning "wsl --update failed after 3 attempts (transient CDN error); continuing with the runner's preinstalled WSL."
 
       - name: WSL version
         run: wsl --version
