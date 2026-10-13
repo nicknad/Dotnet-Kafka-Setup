@@ -1,0 +1,40 @@
+name: Integration
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wslc-kafka:
+    # WSL Containers only exist on Windows; the ubuntu CI job runs the same suite as skipped.
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Update WSL
+        shell: pwsh
+        run: |
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            wsl --update
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Start-Sleep -Seconds 10
+          }
+          Write-Warning "wsl --update failed after 3 attempts (transient CDN error); continuing with the runner's preinstalled WSL."
+
+      - name: WSL version
+        run: wsl --version
+
+      - name: Run WSL Containers integration tests
+        env:
+          WSLC_RUN_INTEGRATION: "1"
+        run: dotnet test tests/KafkaPipeline.IntegrationTests/KafkaPipeline.IntegrationTests.csproj --configuration Release -v minimal

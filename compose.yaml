@@ -57,4 +57,10 @@ services:
         condition: service_completed_successfully
     environment:
       Kafka__BootstrapServers: kafka:29092
+      Kafka__IdempotencyStorePath: /data/idempotency
+    volumes:
+      - idempotency-data:/data/idempotency
     restart: unless-stopped
+
+volumes:
+  idempotency-data:

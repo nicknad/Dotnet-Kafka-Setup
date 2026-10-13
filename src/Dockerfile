@@ -1,5 +1,7 @@
 FROM mcr.microsoft.com/dotnet/runtime:10.0 AS base
 WORKDIR /app
+# Owned by the app user so a mounted volume inherits writable ownership (idempotency store).
+RUN mkdir -p /data/idempotency && chown -R $APP_UID:$APP_UID /data
 USER $APP_UID
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build

@@ -55,6 +55,12 @@ public sealed class InMemoryIdempotencyStore : IIdempotencyStore
 
     public bool Contains(string key) => _entries.ContainsKey(key);
 
+    /// <summary>No-op: all state is managed memory.</summary>
+    public void Dispose()
+    {
+        // Nothing to release.
+    }
+
     private void EvictExcess()
     {
         while (Volatile.Read(ref _count) > _maxEntries)

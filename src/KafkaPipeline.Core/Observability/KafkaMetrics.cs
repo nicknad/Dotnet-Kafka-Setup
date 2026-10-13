@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 
@@ -38,6 +39,14 @@ public static class KafkaMetrics
         unit: "ms",
         description: "Duration of synchronous offset commits in milliseconds.");
 
+    private static readonly ConcurrentDictionary<(string Topic, int Partition), long> ConsumerLagByPartition = new();
+
+    public static readonly ObservableGauge<long> ConsumerLag = Meter.CreateObservableGauge(
+        "messaging.consumer.lag",
+        ObserveConsumerLag,
+        unit: "{message}",
+        description: "Current consumer lag per topic-partition, from librdkafka statistics.");
+
     /// <summary>
     /// Records a produce attempt. Status is "ok" or "error"; code is the
     /// Kafka error code for failures and null for successes.
@@ -53,10 +62,45 @@ public static class KafkaMetrics
     }
 
     /// <summary>
-    /// Records a consumed message. Status is "ok", "malformed" or "tombstone".
+    /// Records a consumed message. Status is "ok", "malformed" or "tombstone";
+    /// <paramref name="retryCount"/> (from the retry headers) tags messages that
+    /// arrived through a retry topic with their attempt number.
     /// </summary>
-    public static void RecordConsume(string topic, string status) =>
-        ConsumeMessages.Add(1, new TagList { { "topic", topic }, { "status", status } });
+    public static void RecordConsume(string topic, string status, int retryCount = 0)
+    {
+        var tags = new TagList { { "topic", topic }, { "status", status } };
+        if (retryCount > 0)
+        {
+            tags.Add("retry.count", retryCount);
+        }
+
+        ConsumeMessages.Add(1, tags);
+    }
+
+    /// <summary>
+    /// Updates the lag of a topic-partition. Negative values (librdkafka's
+    /// "unknown") remove the entry so the gauge stops reporting it.
+    /// </summary>
+    public static void RecordLag(string topic, int partition, long lag)
+    {
+        if (lag < 0)
+        {
+            ConsumerLagByPartition.TryRemove((topic, partition), out _);
+            return;
+        }
+
+        ConsumerLagByPartition[(topic, partition)] = lag;
+    }
+
+    private static IEnumerable<Measurement<long>> ObserveConsumerLag()
+    {
+        foreach (var ((topic, partition), lag) in ConsumerLagByPartition)
+        {
+            yield return new Measurement<long>(
+                lag,
+                new TagList { { "topic", topic }, { "partition", partition } });
+        }
+    }
 
     /// <summary>
     /// Records a message successfully routed to the dead-letter topic.

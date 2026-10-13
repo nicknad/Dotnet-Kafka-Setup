@@ -103,9 +103,13 @@ internal sealed class ConsumerWorker(
                     continue;
                 }
 
+                var retryCount = result.Message.Value is null
+                    ? 0
+                    : RetryPolicy.GetAttemptCount(result.Message.Headers);
+
                 if (result.Message.Value is null)
                 {
-                    KafkaMetrics.RecordConsume(kafka.Topic, "tombstone");
+                    KafkaMetrics.RecordConsume(result.Topic, "tombstone");
                     logger.LogWarning("Skipping tombstone at {TopicPartitionOffset}", result.TopicPartitionOffset);
                 }
                 else if (ProtobufMessageParser.TryParse<PrimeNumber>(
@@ -118,7 +122,7 @@ internal sealed class ConsumerWorker(
                     try
                     {
                         Process(result, prime, kafka.Topic);
-                        KafkaMetrics.RecordConsume(kafka.Topic, "ok");
+                        KafkaMetrics.RecordConsume(result.Topic, "ok", retryCount);
                     }
                     catch (Exception exception) when (exception is not OperationCanceledException)
                     {
@@ -146,7 +150,7 @@ internal sealed class ConsumerWorker(
                 }
                 else
                 {
-                    KafkaMetrics.RecordConsume(kafka.Topic, "malformed");
+                    KafkaMetrics.RecordConsume(result.Topic, "malformed", retryCount);
                     await PublishToDeadLetterAsync(producer, deadLetterTopic, result, reason, stoppingToken);
                 }
 
