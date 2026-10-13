@@ -168,10 +168,11 @@ public sealed class KafkaPipelineIntegrationTests
             .Build();
 
         var deadline = DateTime.UtcNow + timeout;
+        var partitions = new[] { new TopicPartition(topic, 0) };
         while (DateTime.UtcNow < deadline)
         {
-            var committed = consumer.Committed(new TopicPartition(topic, 0), TimeSpan.FromSeconds(5));
-            if (committed.Offset.Value >= expectedOffset)
+            var committed = consumer.Committed(partitions, TimeSpan.FromSeconds(5));
+            if (committed.Count > 0 && committed[0].Offset.Value >= expectedOffset)
             {
                 return true;
             }
