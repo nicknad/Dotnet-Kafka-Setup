@@ -13,6 +13,7 @@ namespace KafkaProducerApp;
 
 internal sealed class ProducerWorker(
     IOptions<KafkaOptions> options,
+    ISchemaVersionProvider schemaVersions,
     ILogger<ProducerWorker> logger) : BackgroundService
 {
     private const int MaxCandidate = 10_000;
@@ -25,6 +26,7 @@ internal sealed class ProducerWorker(
         using var producer = new ProducerBuilder<Null, PrimeNumber>(KafkaClients.IdempotentProducerConfig(kafka.BootstrapServers))
             .SetValueSerializer(new ProtobufSerializer<PrimeNumber>())
             .SetErrorHandler((_, error) => logger.LogKafkaError(error))
+            .SetStatisticsHandler((_, statistics) => logger.LogKafkaStatistics(statistics))
             .Build();
 
         logger.LogInformation("Publishing primes to {Topic} via {BootstrapServers}", kafka.Topic, kafka.BootstrapServers);
@@ -65,6 +67,7 @@ internal sealed class ProducerWorker(
 
         var headers = new Headers();
         KafkaTraceContext.Inject(activity, headers);
+        MessageEnvelope.ApplyTo(headers, schemaVersions.CurrentVersion, nameof(PrimeNumber));
 
         var message = new Message<Null, PrimeNumber>
         {
@@ -76,9 +79,12 @@ internal sealed class ProducerWorker(
             Headers = headers
         };
 
+        var started = Stopwatch.GetTimestamp();
         try
         {
             var delivery = await producer.ProduceAsync(topic, message, cancellationToken);
+            var durationMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            KafkaMetrics.RecordProduce(topic, durationMs, "ok");
             activity?.SetTag("messaging.kafka.partition", delivery.Partition.Value);
             activity?.SetTag("messaging.kafka.offset", delivery.Offset.Value);
             logger.LogDebug(
@@ -89,6 +95,11 @@ internal sealed class ProducerWorker(
         }
         catch (ProduceException<Null, PrimeNumber> exception)
         {
+            KafkaMetrics.RecordProduce(
+                topic,
+                Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                "error",
+                exception.Error.Code.ToString());
             activity?.SetStatus(ActivityStatusCode.Error, exception.Error.Reason);
             logger.LogError(exception, "Failed to publish prime {Prime}: {Reason}", value, exception.Error.Reason);
 

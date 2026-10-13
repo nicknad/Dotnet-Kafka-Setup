@@ -4,6 +4,7 @@ using KafkaPipeline.Core.Observability;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Serilog;
@@ -37,6 +38,19 @@ public static class KafkaPipelineHostingExtensions
                 else
                 {
                     tracing.AddConsoleExporter();
+                }
+            })
+            .WithMetrics(metrics =>
+            {
+                metrics.AddMeter(KafkaMetrics.MeterName);
+
+                if (Uri.TryCreate(builder.Configuration["Otlp:Endpoint"], UriKind.Absolute, out var endpoint))
+                {
+                    metrics.AddOtlpExporter(exporter => exporter.Endpoint = endpoint);
+                }
+                else
+                {
+                    metrics.AddConsoleExporter();
                 }
             });
 
