@@ -2,68 +2,56 @@
 
 [![CI](https://github.com/nicknad/Dotnet-Kafka-Setup/actions/workflows/ci.yml/badge.svg)](https://github.com/nicknad/Dotnet-Kafka-Setup/actions/workflows/ci.yml)
 
-A small, production-shaped example of a Kafka producer/consumer pipeline built on modern .NET
-(.NET 10, C# 14, Confluent.Kafka, Protobuf, OpenTelemetry, Serilog, Generic Host).
+A production-shaped Kafka pipeline on .NET 10 (Confluent.Kafka, Protobuf, OpenTelemetry, Serilog,
+Generic Host). The producer publishes protobuf-encoded primes below 10,000 to `primes-topic`; the
+consumer processes them with batched manual commits, durable idempotency, retry-with-backoff,
+dead-lettering, and trace/metric export.
 
-The producer generates primes below 10,000 and publishes protobuf-encoded `PrimeNumber` messages to
-`primes-topic`. The consumer processes them in the `prime-consumer-group`, commits offsets manually in
-batches (at-least-once), forwards malformed payloads to a dead-letter topic, and continues tracing the
-work using the trace context propagated through Kafka message headers.
+## Features
 
-## What this demonstrates
-
-- **Generic Host, dependency injection and typed options** with validation at startup
-- **Configuration via `appsettings.json` + environment variables** (`Kafka__BootstrapServers`, ...)
-- **Confluent.Kafka client configuration**: idempotent producer (`Acks.All`), manual consumer commits
-  batched by count/interval (plus on shutdown and rebalance), rebalance handlers, tombstone handling
-- **Poison-message handling**: the consumer reads raw bytes, parses Protobuf explicitly, and forwards
-  malformed payloads (original bytes + headers + failure metadata) to a dead-letter topic instead of
-  crashing
-- **Protobuf contract in a shared library** generated once and referenced by both apps
-- **Graceful shutdown**: `BackgroundService` + `CancellationToken`, producer flush on exit
-- **Distributed tracing across the async boundary**: W3C `traceparent` injected into Kafka headers,
-  extracted by the consumer as the parent activity; OTLP or console exporter
-- **Structured logging** with Serilog message templates
-- **KRaft-mode Kafka in Docker Compose** with healthcheck, explicit topic provisioning, and separate
-  internal/external listeners so containers and host processes can both connect
-- **Unit tests and CI** (GitHub Actions), central package management, pinned broker image
-- **Supply-chain checks**: NuGet audit with high/critical advisories as errors, PackageGuard license
-  and package policy, CycloneDX SBOM published by CI
+- Typed options validated at startup; configuration via `appsettings.json` or `Kafka__*` env vars
+- Idempotent producer (`Acks.All`); manual commits batched by count/interval and on rebalance/shutdown,
+  covering every assigned partition
+- At-least-once processing: offsets commit after handling; redeliveries are absorbed by a **RocksDB
+  idempotency store** (in-memory store available for tests and short-lived tools)
+- Poison handling: malformed payloads dead-letter immediately with original bytes, headers and `dlq.*`
+  metadata; transient failures retry on `<topic>.retry` with exponential backoff (capped at 30s) and
+  dead-letter once attempts are exhausted
+- Versioned protobuf envelope (`schema.version`, `content.type` headers); a missing version means v1;
+  `ISchemaVersionProvider` is the seam for a real schema registry
+- W3C `traceparent` spans across the async boundary; metrics for produce/consume/commit/DLQ plus a
+  consumer-lag gauge from librdkafka statistics (OTLP or console exporters)
+- KRaft Kafka in Docker Compose: healthcheck, explicit topic provisioning, internal/external listeners
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    P[KafkaProducerApp<br/>BackgroundService] -->|PrimeNumber<br/>protobuf + traceparent| T[(primes-topic<br/>3 partitions)]
-    T --> C[KafkaConsumerApp<br/>consumer group + batched commits]
-    C -->|malformed payload<br/>+ dlq headers| DL[(primes-topic.dlq<br/>3 partitions)]
+    P[KafkaProducerApp] -->|PrimeNumber + traceparent| T[(primes-topic)]
+    T --> C[KafkaConsumerApp]
+    C -->|transient failure| R[(primes-topic.retry)]
+    R --> C
+    C -->|malformed / retries exhausted| DL[(primes-topic.dlq)]
 ```
 
 ## Prerequisites
 
-- [.NET SDK 10](https://dotnet.microsoft.com/download) (only needed for local runs/tests)
+- [.NET SDK 10](https://dotnet.microsoft.com/download) (local runs/tests)
 - [Docker](https://docs.docker.com/get-docker/) with Compose v2
 
-## Quick start (everything in Docker)
+## Quick start
 
 ```bash
-git clone https://github.com/nicknad/Dotnet-Kafka-Setup
-cd Dotnet-Kafka-Setup
 docker compose up --build
 ```
 
-Compose starts the broker, waits for its healthcheck, creates `primes-topic` and `primes-topic.dlq`
-if needed, then starts the consumer and producer. The producer publishes for roughly 100 seconds and
-exits; the consumer keeps running (and is restarted by Compose if it ever stops unexpectedly).
+Compose starts the broker, waits for its healthcheck, creates the topics, then starts the consumer and
+producer. The producer exits once it has published all primes; the consumer keeps running.
 
-## Running the apps locally
-
-Start just the broker and topic provisioning, then run the apps from your IDE or CLI. The apps read
-`localhost:9092`, which maps to the broker's external listener.
+Run locally instead:
 
 ```bash
 docker compose up -d kafka kafka-init
-
 dotnet run --project src/KafkaConsumerApp
 dotnet run --project src/KafkaProducerApp
 ```
@@ -75,23 +63,29 @@ dotnet run --project src/KafkaProducerApp
 | `Kafka:BootstrapServers` | `localhost:9092` | Broker endpoint (comma-separated list supported) |
 | `Kafka:Topic` | `primes-topic` | Topic produced to / consumed from |
 | `Kafka:ConsumerGroup` | `prime-consumer-group` | Consumer group (consumer only) |
-| `Kafka:DeadLetterTopic` | `<Topic>.dlq` | Override for the dead-letter topic (consumer only) |
-| `Kafka:CommitBatchSize` | `100` | Commit offsets after this many handled messages (consumer only) |
+| `Kafka:DeadLetterTopic` | `<Topic>.dlq` | Dead-letter topic (consumer only) |
+| `Kafka:RetryTopic` | `<Topic>.retry` | Retry topic for transient failures (consumer only) |
+| `Kafka:MaxRetryAttempts` | `3` | Retries before dead-lettering (consumer only) |
+| `Kafka:RetryBackoffMs` | `1000` | Base backoff, doubling per attempt and capped at 30s (consumer only) |
+| `Kafka:CommitBatchSize` | `100` | Commit after this many handled messages (consumer only) |
 | `Kafka:CommitInterval` | `00:00:05` | ...or after this long, whichever comes first (consumer only) |
-| `Otlp:Endpoint` | *(empty)* | If set, traces are exported via OTLP; otherwise the console exporter is used |
+| `Kafka:IdempotencyStore` | `RocksDb` | `RocksDb` (durable) or `InMemory` (process-local) (consumer only) |
+| `Kafka:IdempotencyStorePath` | temp dir | RocksDB directory; mount a volume to survive restarts (consumer only) |
+| `Kafka:IdempotencyMaxEntries` | `100000` | Dedup keys retained before oldest-first trimming (consumer only) |
+| `Otlp:Endpoint` | *(empty)* | If set, traces and metrics export via OTLP; console exporter otherwise |
 
-Any setting can be overridden with environment variables using the standard .NET convention,
-e.g. `Kafka__BootstrapServers=kafka:29092`. Options are validated on startup.
+Any setting can be overridden with environment variables, e.g. `Kafka__BootstrapServers=kafka:29092`.
 
 ## Project layout
 
 ```
-src/KafkaPipeline.Core       protobuf contract, serializer/parser, options, tracing and hosting helpers
-src/KafkaProducerApp         producer worker + configuration
-src/KafkaConsumerApp         consumer worker + configuration
-src/Dockerfile               one parameterized image build for both apps (`--build-arg APP=...`)
-tests/KafkaPipeline.Tests    unit tests for prime logic, serialization and trace propagation
-compose.yaml                 single-node KRaft Kafka, topic init, both apps
+src/KafkaPipeline.Core               contract, messaging, observability, hosting helpers
+src/KafkaProducerApp                 producer worker
+src/KafkaConsumerApp                 consumer worker (idempotency, retry, DLQ)
+tests/KafkaPipeline.Tests            unit tests
+tests/KafkaPipeline.IntegrationTests broker-backed tests (Windows/WSL Containers, CI only)
+src/Dockerfile                       one parameterized image build for both apps (--build-arg APP=...)
+compose.yaml                         KRaft Kafka, topic init, both apps
 ```
 
 ## Tests
@@ -100,56 +94,31 @@ compose.yaml                 single-node KRaft Kafka, topic init, both apps
 dotnet test KafkaPipeline.slnx
 ```
 
-The GitHub Actions workflow restores, builds and tests the solution on every push and pull request.
-
-## Supply-chain policy
-
-Dependency policy is enforced mechanically instead of reviewed after the fact:
-
-- **Vulnerabilities** — `NuGetAudit` runs on every restore across direct and transitive packages.
-  [`Directory.Build.props`](Directory.Build.props) sets the audit level to `moderate` and turns
-  high (`NU1903`) and critical (`NU1904`) advisories into errors, so a restore/build fails instead of
-  shipping a known-vulnerable dependency.
-- **Licenses and banned packages** — [PackageGuard](https://packageguard.org/) enforces the allow/deny
-  lists in [`packageguard.config.json`](packageguard.config.json). The tool is pinned in
-  [`.config/dotnet-tools.json`](.config/dotnet-tools.json), so the same version runs locally and in CI.
-- **SBOM** — CI emits a CycloneDX SBOM for the resolved dependency graph and uploads it as a build
-  artifact.
-
-```bash
-dotnet restore KafkaPipeline.slnx                # vulnerability audit runs automatically
-dotnet package list --project KafkaPipeline.slnx --vulnerable --include-transitive
-dotnet tool restore
-dotnet tool run packageguard -- KafkaPipeline.slnx --skip-restore \
-  --sbom cyclonedx --sbom-output artifacts/sbom.cyclonedx.json
-```
-
-To allow a new license or pin a package version, update `packageguard.config.json`. To accept a
-specific advisory temporarily, suppress it with `NoWarn` and a comment explaining why.
+Unit tests cover prime logic, commit tracking, idempotency stores, retry policy, schema versioning,
+trace context and metrics. `tests/KafkaPipeline.IntegrationTests` runs the consumer against a real
+broker via [Wslc.Testcontainers](https://github.com/nicknad/Wslc.Testcontainers) in the GitHub Actions
+Windows job (`.github/workflows/integration.yml`, `WSLC_RUN_INTEGRATION=1`); on Linux the project is
+inert and its tests are skipped.
 
 ## Design decisions
 
-- **Raw Confluent.Kafka instead of a framework** (MassTransit/Wolverine): this example stays close to
-  the protocol so producer/consumer configuration is explicit and visible.
-- **At-least-once delivery**: offsets are committed after processing — every `CommitBatchSize` handled
-  messages or `CommitInterval`, whichever comes first, and always on shutdown and partition revocation.
-  Duplicates are possible if the process dies before a commit, so consumers must be idempotent.
-- **Dead-letter instead of crashing**: the consumer consumes raw bytes and parses Protobuf explicitly,
-  because a typed deserializer throws inside `Consume` before a result exists — no payload, offset or
-  headers to act on. A malformed payload is forwarded with its original bytes, original headers
-  (including `traceparent`) and `dlq.*` metadata headers to `Kafka:DeadLetterTopic`, and its offset is
-  committed only after that write succeeds; if the write fails, the worker stops rather than skip the
-  message. Retry topics with backoff are out of scope — parse failures are permanent.
-- **No schema registry**: the protobuf contract is compiled into a shared library. In production,
-  pairing Protobuf with a schema registry (and a magic-byte framing convention) makes schema
-  evolution safe across independent deployments.
-- **Separate listeners**: `INTERNAL://kafka:29092` for containers, `EXTERNAL://localhost:9092` for
-  host processes — the same broker serves both without editing code.
-- **Trace context in headers**: W3C `traceparent` is injected/extracted manually, keeping the
-  pipeline traceable end to end without a broker plugin.
+- **At-least-once with durable dedup**: offsets commit after handling; duplicates are skipped via a
+  RocksDB store keyed by topic-partition-offset, so a crash before commit does not reprocess on
+  restart. The in-memory store only deduplicates within one process.
+- **Retry, then dead-letter**: parse failures are permanent and go straight to `<topic>.dlq`;
+  processing exceptions retry with backoff and dead-letter after `Kafka:MaxRetryAttempts`. If a DLQ or
+  retry produce fails, the worker stops rather than skipping the message.
+- **Schema versioning without a registry**: the payload stays pure protobuf; the version travels in
+  headers; unknown versions are dead-lettered for an upgrade.
+- **Raw Confluent.Kafka** instead of a framework: producer and consumer configuration stays explicit.
+- **Separate listeners**: `INTERNAL://kafka:29092` for containers, `EXTERNAL://localhost:9092` for host
+  processes — the same broker serves both without code changes.
+- **Trace context in headers**: W3C `traceparent` is injected/extracted manually, keeping the pipeline
+  traceable end to end without a broker plugin.
 
-## Third-party licenses
+## Supply chain
 
-Every dependency and its license are listed in the CycloneDX SBOM that CI generates on each build
-(see [Supply-chain policy](#supply-chain-policy)), and PackageGuard fails the build on any license
-outside the allow list in [`packageguard.config.json`](packageguard.config.json).
+`NuGetAudit` fails the build on high/critical advisories; [PackageGuard](https://packageguard.org/)
+enforces the license/package policy in [`packageguard.config.json`](packageguard.config.json); CI
+publishes a CycloneDX SBOM. All three run in the ubuntu CI job:
+[`ci.yml`](.github/workflows/ci.yml).
