@@ -19,9 +19,7 @@ internal sealed class ConsumerWorker(
     private const int CommitRetryCount = 3;
     private static readonly TimeSpan CommitRetryDelay = TimeSpan.FromMilliseconds(250);
 
-    private ConsumeResult<Ignore, byte[]>? pendingCommit;
-    private int handledSinceCommit;
-    private readonly Stopwatch commitTimer = Stopwatch.StartNew();
+    private readonly CommitTracker _commitTracker = new();
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -56,7 +54,7 @@ internal sealed class ConsumerWorker(
                 logger.LogInformation(
                     "Revoked partitions: {Partitions}",
                     string.Join(", ", partitions.Select(partition => partition.Partition.Value)));
-                CommitProcessed(c);
+                CommitProcessed(c, stoppingToken);
             })
             .Build();
 
@@ -104,12 +102,11 @@ internal sealed class ConsumerWorker(
                     await PublishToDeadLetterAsync(deadLetterProducer, deadLetterTopic, result, reason, stoppingToken);
                 }
 
-                pendingCommit = result;
-                handledSinceCommit++;
+                _commitTracker.Track(result.TopicPartitionOffset);
 
-                if (handledSinceCommit >= kafka.CommitBatchSize || commitTimer.Elapsed >= kafka.CommitInterval)
+                if (_commitTracker.ShouldCommit(kafka.CommitBatchSize, kafka.CommitInterval))
                 {
-                    CommitProcessed(consumer);
+                    await CommitProcessedAsync(consumer, stoppingToken);
                 }
             }
         }
@@ -119,7 +116,7 @@ internal sealed class ConsumerWorker(
         }
         finally
         {
-            CommitProcessed(consumer);
+            CommitProcessed(consumer, stoppingToken);
             deadLetterProducer.Flush(TimeSpan.FromSeconds(5));
             consumer.Close();
         }
@@ -193,20 +190,25 @@ internal sealed class ConsumerWorker(
             result.Offset.Value);
     }
 
-    private void CommitProcessed(IConsumer<Ignore, byte[]> consumer)
+    private async Task CommitProcessedAsync(IConsumer<Ignore, byte[]> consumer, CancellationToken cancellationToken)
     {
-        if (pendingCommit is null)
+        if (!_commitTracker.HasPending)
         {
             return;
         }
+
+        var offsets = _commitTracker.GetOffsetsToCommit();
 
         for (var attempt = 1; ; attempt++)
         {
             try
             {
-                consumer.Commit(pendingCommit);
-                logger.LogDebug("Committed through {TopicPartitionOffset}", pendingCommit.TopicPartitionOffset);
-                ResetCommitState();
+                consumer.Commit(offsets);
+                logger.LogDebug(
+                    "Committed {Count} partition offset(s): {Offsets}",
+                    offsets.Count,
+                    string.Join(", ", offsets.Select(static offset => offset.ToString())));
+                _commitTracker.Reset();
                 return;
             }
             catch (KafkaException exception) when (IsRetriableCommitError(exception) && attempt < CommitRetryCount)
@@ -216,27 +218,82 @@ internal sealed class ConsumerWorker(
                     attempt,
                     CommitRetryCount,
                     exception.Error.Reason);
-                Thread.Sleep(CommitRetryDelay);
+                try
+                {
+                    await Task.Delay(CommitRetryDelay, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Shutdown requested: leave offsets pending so the
+                    // synchronous finally-commit can retry without delay.
+                    return;
+                }
             }
             catch (KafkaException exception)
             {
                 logger.LogError(
                     exception,
-                    "Failed to commit through {TopicPartitionOffset}; those offsets will be reprocessed",
-                    pendingCommit.TopicPartitionOffset);
-                ResetCommitState();
+                    "Failed to commit {Count} partition offset(s) ({Offsets}); those offsets will be reprocessed",
+                    offsets.Count,
+                    string.Join(", ", offsets.Select(static offset => offset.ToString())));
+                _commitTracker.Reset();
+                return;
+            }
+        }
+    }
+
+    private void CommitProcessed(IConsumer<Ignore, byte[]> consumer, CancellationToken cancellationToken = default)
+    {
+        if (!_commitTracker.HasPending)
+        {
+            return;
+        }
+
+        var offsets = _commitTracker.GetOffsetsToCommit();
+
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                consumer.Commit(offsets);
+                logger.LogDebug(
+                    "Committed {Count} partition offset(s): {Offsets}",
+                    offsets.Count,
+                    string.Join(", ", offsets.Select(static offset => offset.ToString())));
+                _commitTracker.Reset();
+                return;
+            }
+            catch (KafkaException exception) when (IsRetriableCommitError(exception) && attempt < CommitRetryCount)
+            {
+                logger.LogWarning(
+                    "Commit attempt {Attempt} of {Attempts} failed: {Reason}; retrying",
+                    attempt,
+                    CommitRetryCount,
+                    exception.Error.Reason);
+                // Cancellable delay (no Thread.Sleep): on shutdown the wait
+                // completes immediately but the retry is still attempted.
+                try
+                {
+                    Task.Delay(CommitRetryDelay, cancellationToken).GetAwaiter().GetResult();
+                }
+                catch (OperationCanceledException)
+                {
+                    // Fall through and retry immediately.
+                }
+            }
+            catch (KafkaException exception)
+            {
+                logger.LogError(
+                    exception,
+                    "Failed to commit {Count} partition offset(s) ({Offsets}); those offsets will be reprocessed",
+                    offsets.Count,
+                    string.Join(", ", offsets.Select(static offset => offset.ToString())));
+                _commitTracker.Reset();
                 return;
             }
         }
     }
 
     private static bool IsRetriableCommitError(KafkaException exception) =>
-        exception is KafkaRetriableException || exception.Error.Code == ErrorCode.RebalanceInProgress;
-
-    private void ResetCommitState()
-    {
-        pendingCommit = null;
-        handledSinceCommit = 0;
-        commitTimer.Restart();
-    }
+        CommitTracker.IsRetriableCommitError(exception);
 }
