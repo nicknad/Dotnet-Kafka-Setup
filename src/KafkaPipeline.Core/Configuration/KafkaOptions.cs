@@ -12,6 +12,12 @@ public sealed class KafkaOptions
 
     public string DeadLetterTopic { get; set; } = string.Empty;
 
+    public string RetryTopic { get; set; } = string.Empty;
+
+    public int MaxRetryAttempts { get; set; } = 3;
+
+    public int RetryBackoffMs { get; set; } = 1000;
+
     public int CommitBatchSize { get; set; } = 100;
 
     public TimeSpan CommitInterval { get; set; } = TimeSpan.FromSeconds(5);

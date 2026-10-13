@@ -32,7 +32,7 @@ services:
         condition: service_healthy
     entrypoint: ["/bin/bash", "-c"]
     command:
-      - "for topic in primes-topic primes-topic.dlq; do kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic $$topic --partitions 3 --replication-factor 1; done"
+      - "for topic in primes-topic primes-topic.dlq primes-topic.retry; do kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic $$topic --partitions 3 --replication-factor 1; done"
 
   kafkaproducerapp:
     build:

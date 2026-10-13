@@ -39,7 +39,11 @@ internal sealed class ConsumerWorker(
             ? $"{kafka.Topic}.dlq"
             : kafka.DeadLetterTopic;
 
-        using var deadLetterProducer = new ProducerBuilder<Null, byte[]>(KafkaClients.IdempotentProducerConfig(kafka.BootstrapServers))
+        var retryTopic = RetryPolicy.ResolveRetryTopic(kafka.Topic, kafka.RetryTopic);
+        var maxRetryAttempts = kafka.MaxRetryAttempts;
+        var retryBackoffMs = kafka.RetryBackoffMs;
+
+        using var producer = new ProducerBuilder<Null, byte[]>(KafkaClients.IdempotentProducerConfig(kafka.BootstrapServers))
             .SetValueSerializer(Serializers.ByteArray)
             .SetErrorHandler((_, error) => logger.LogKafkaError(error))
             .Build();
@@ -59,12 +63,17 @@ internal sealed class ConsumerWorker(
             })
             .Build();
 
-        consumer.Subscribe(kafka.Topic);
+        var topics = string.Equals(kafka.Topic, retryTopic, StringComparison.Ordinal)
+            ? new[] { kafka.Topic }
+            : new[] { kafka.Topic, retryTopic };
+        consumer.Subscribe(topics);
         logger.LogInformation(
-            "Subscribed to {Topic} as consumer group {GroupId}; malformed messages are dead-lettered to {DeadLetterTopic}",
-            kafka.Topic,
+            "Subscribed to {Topics} as consumer group {GroupId}; malformed messages are dead-lettered to {DeadLetterTopic}, transient failures retry to {RetryTopic} up to {MaxAttempts} attempts",
+            string.Join(",", topics),
             kafka.ConsumerGroup,
-            deadLetterTopic);
+            deadLetterTopic,
+            retryTopic,
+            maxRetryAttempts);
 
         try
         {
@@ -96,11 +105,37 @@ internal sealed class ConsumerWorker(
                 }
                 else if (ProtobufMessageParser.TryParse<PrimeNumber>(result.Message.Value, out var prime, out var reason))
                 {
-                    Process(result, prime, kafka.Topic);
+                    try
+                    {
+                        Process(result, prime, kafka.Topic);
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        var attemptCount = RetryPolicy.GetAttemptCount(result.Message.Headers);
+                        if (RetryPolicy.Decide(attemptCount, maxRetryAttempts) == RetryDecision.DeadLetter)
+                        {
+                            await PublishToDeadLetterAsync(
+                                producer,
+                                deadLetterTopic,
+                                result,
+                                $"retry-exhausted after {attemptCount} attempts: {exception.Message}",
+                                stoppingToken);
+                        }
+                        else
+                        {
+                            await PublishToRetryAsync(
+                                producer,
+                                retryTopic,
+                                result,
+                                exception.Message,
+                                retryBackoffMs,
+                                stoppingToken);
+                        }
+                    }
                 }
                 else
                 {
-                    await PublishToDeadLetterAsync(deadLetterProducer, deadLetterTopic, result, reason, stoppingToken);
+                    await PublishToDeadLetterAsync(producer, deadLetterTopic, result, reason, stoppingToken);
                 }
 
                 _commitTracker.Track(result.TopicPartitionOffset);
@@ -118,7 +153,7 @@ internal sealed class ConsumerWorker(
         finally
         {
             CommitProcessed(consumer, stoppingToken);
-            deadLetterProducer.Flush(TimeSpan.FromSeconds(5));
+            producer.Flush(TimeSpan.FromSeconds(5));
             consumer.Close();
         }
     }
@@ -169,6 +204,63 @@ internal sealed class ConsumerWorker(
             logger.LogError(
                 exception,
                 "Failed to dead-letter message from {TopicPartitionOffset}; stopping so the message is not skipped",
+                result.TopicPartitionOffset);
+            throw;
+        }
+    }
+
+    private async Task PublishToRetryAsync(
+        IProducer<Null, byte[]> producer,
+        string retryTopic,
+        ConsumeResult<Ignore, byte[]> result,
+        string lastError,
+        int retryBackoffMs,
+        CancellationToken cancellationToken)
+    {
+        using var activity = ActivitySources.Consumer.StartKafkaActivity(
+            "retry message", ActivityKind.Producer, result.Message.Headers, retryTopic);
+
+        activity?.SetTag("messaging.kafka.partition", result.Partition.Value);
+        activity?.SetTag("messaging.kafka.offset", result.Offset.Value);
+
+        var headers = RetryPolicy.BuildRetryHeaders(result.Message.Headers, lastError);
+        var nextCount = RetryPolicy.GetAttemptCount(headers);
+        activity?.SetTag("retry.count", nextCount);
+
+        var delay = RetryPolicy.GetRetryDelay(nextCount, retryBackoffMs);
+        if (delay > TimeSpan.Zero)
+        {
+            logger.LogWarning(
+                "Transient failure for {TopicPartitionOffset}; retry {Attempt} to {RetryTopic} after {DelayMs}ms: {Error}",
+                result.TopicPartitionOffset,
+                nextCount,
+                retryTopic,
+                (int)delay.TotalMilliseconds,
+                lastError);
+            await Task.Delay(delay, cancellationToken);
+        }
+
+        var message = new Message<Null, byte[]>
+        {
+            Value = result.Message.Value,
+            Headers = headers
+        };
+
+        try
+        {
+            await producer.ProduceAsync(retryTopic, message, cancellationToken);
+            logger.LogWarning(
+                "Produced retry {Attempt} for {TopicPartitionOffset} to {RetryTopic}",
+                nextCount,
+                result.TopicPartitionOffset,
+                retryTopic);
+        }
+        catch (ProduceException<Null, byte[]> exception)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, exception.Error.Reason);
+            logger.LogError(
+                exception,
+                "Failed to produce retry for {TopicPartitionOffset}; stopping so the message is not skipped",
                 result.TopicPartitionOffset);
             throw;
         }
