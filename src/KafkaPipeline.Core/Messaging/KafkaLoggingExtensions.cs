@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Text.Json;
 using Confluent.Kafka;
+using KafkaPipeline.Core.Observability;
 using Microsoft.Extensions.Logging;
 
 namespace KafkaPipeline.Core.Messaging;
@@ -49,7 +51,7 @@ public static class KafkaLoggingExtensions
                 clientId = nameElement.GetString();
             }
 
-            var totalLag = SumConsumerLag(root);
+            var totalLag = CollectConsumerLag(root);
 
             var brokerCount = 0;
             var brokersDown = 0;
@@ -86,7 +88,7 @@ public static class KafkaLoggingExtensions
         }
     }
 
-    private static long SumConsumerLag(JsonElement root)
+    private static long CollectConsumerLag(JsonElement root)
     {
         var totalLag = 0L;
 
@@ -107,14 +109,21 @@ public static class KafkaLoggingExtensions
 
             foreach (var partition in partitions.EnumerateObject())
             {
-                // consumer_lag is -1 when unknown; only non-negative values are meaningful.
                 if (partition.Value.ValueKind == JsonValueKind.Object
                     && partition.Value.TryGetProperty("consumer_lag", out var lag)
                     && lag.ValueKind == JsonValueKind.Number
-                    && lag.TryGetInt64(out var lagValue)
-                    && lagValue > 0)
+                    && lag.TryGetInt64(out var lagValue))
                 {
-                    totalLag += lagValue;
+                    // consumer_lag is -1 when unknown; RecordLag removes those entries.
+                    if (int.TryParse(partition.Name, NumberStyles.Integer, CultureInfo.InvariantCulture, out var partitionId))
+                    {
+                        KafkaMetrics.RecordLag(topic.Name, partitionId, lagValue);
+                    }
+
+                    if (lagValue > 0)
+                    {
+                        totalLag += lagValue;
+                    }
                 }
             }
         }

@@ -100,6 +100,57 @@ public sealed class KafkaMetricsTests
     }
 
     [Fact]
+    public void RecordConsume_WithRetryCount_TagsRetryAttempt()
+    {
+        var measurements = Collect(() => KafkaMetrics.RecordConsume("primes-topic.retry", "ok", retryCount: 2));
+
+        var measurement = Assert.Single(measurements, m => m.Instrument == "messaging.consume.messages");
+        Assert.Equal("primes-topic.retry", measurement.Tags["topic"]);
+        Assert.Equal(2, measurement.Tags["retry.count"]);
+    }
+
+    [Fact]
+    public void RecordConsume_WithoutRetryCount_OmitsRetryTag()
+    {
+        var measurements = Collect(() => KafkaMetrics.RecordConsume("primes-topic", "ok"));
+
+        var measurement = Assert.Single(measurements, m => m.Instrument == "messaging.consume.messages");
+        Assert.False(measurement.Tags.ContainsKey("retry.count"));
+    }
+
+    [Fact]
+    public void RecordLag_ExposesObservableGaugePerPartition()
+    {
+        var topic = $"lag-{Guid.NewGuid():N}";
+
+        var measurements = Collect(() =>
+        {
+            KafkaMetrics.RecordLag(topic, 0, 5);
+            KafkaMetrics.RecordLag(topic, 1, -1);
+        });
+
+        var measurement = Assert.Single(
+            measurements,
+            m => m.Instrument == "messaging.consumer.lag" && (string?)m.Tags["topic"] == topic);
+        Assert.Equal(5, measurement.Value);
+        Assert.Equal(topic, measurement.Tags["topic"]);
+        Assert.Equal(0, measurement.Tags["partition"]);
+    }
+
+    [Fact]
+    public void RecordLag_UnknownLagRemovesPreviousSample()
+    {
+        var topic = $"lag-{Guid.NewGuid():N}";
+        KafkaMetrics.RecordLag(topic, 3, 9);
+
+        var measurements = Collect(() => KafkaMetrics.RecordLag(topic, 3, -1));
+
+        Assert.DoesNotContain(
+            measurements,
+            m => m.Instrument == "messaging.consumer.lag" && (string?)m.Tags["topic"] == topic);
+    }
+
+    [Fact]
     public void LogKafkaStatistics_ValidPayload_LogsLagSummary()
     {
         var logger = new CapturingLogger<KafkaMetricsTests>();
@@ -141,9 +192,9 @@ public sealed class KafkaMetricsTests
         Assert.Null(exception);
     }
 
-    private static List<(string Instrument, double Value)> Collect(Action record)
+    private static List<(string Instrument, double Value, Dictionary<string, object?> Tags)> Collect(Action record)
     {
-        var measurements = new List<(string Instrument, double Value)>();
+        var measurements = new List<(string Instrument, double Value, Dictionary<string, object?> Tags)>();
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, listenerInstance) =>
         {
@@ -152,15 +203,27 @@ public sealed class KafkaMetricsTests
                 listenerInstance.EnableMeasurementEvents(instrument);
             }
         };
-        listener.SetMeasurementEventCallback<long>((instrument, value, _, _) =>
-            measurements.Add((instrument.Name, value)));
-        listener.SetMeasurementEventCallback<double>((instrument, value, _, _) =>
-            measurements.Add((instrument.Name, value)));
+        listener.SetMeasurementEventCallback<long>((instrument, value, tags, _) =>
+            measurements.Add((instrument.Name, value, CopyTags(tags))));
+        listener.SetMeasurementEventCallback<double>((instrument, value, tags, _) =>
+            measurements.Add((instrument.Name, value, CopyTags(tags))));
         listener.Start();
 
         record();
+        listener.RecordObservableInstruments();
 
         return measurements;
+    }
+
+    private static Dictionary<string, object?> CopyTags(ReadOnlySpan<KeyValuePair<string, object?>> tags)
+    {
+        var copy = new Dictionary<string, object?>(tags.Length, StringComparer.Ordinal);
+        foreach (var tag in tags)
+        {
+            copy[tag.Key] = tag.Value;
+        }
+
+        return copy;
     }
 
     private sealed class CapturingLogger<T> : ILogger<T>
