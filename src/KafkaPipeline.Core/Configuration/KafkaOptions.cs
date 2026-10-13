@@ -28,4 +28,18 @@ public sealed class KafkaOptions
     /// oldest keys are evicted first. Must be at least 1.
     /// </summary>
     public int IdempotencyMaxEntries { get; set; } = 100_000;
+
+    /// <summary>
+    /// Which idempotency store the consumer uses. <see cref="IdempotencyStoreKind.RocksDb"/>
+    /// (default) survives restarts; <see cref="IdempotencyStoreKind.InMemory"/> is
+    /// process-local and only deduplicates within a single run.
+    /// </summary>
+    public IdempotencyStoreKind IdempotencyStore { get; set; } = IdempotencyStoreKind.RocksDb;
+
+    /// <summary>
+    /// Directory of the RocksDB idempotency store. Empty uses a per-machine
+    /// temporary directory; set to a mounted volume for durability across
+    /// container restarts.
+    /// </summary>
+    public string IdempotencyStorePath { get; set; } = string.Empty;
 }

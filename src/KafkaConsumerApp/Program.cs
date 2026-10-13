@@ -25,7 +25,18 @@ builder
     .ValidateOnStart();
 
 builder.Services.AddSingleton<IIdempotencyStore>(sp =>
-    new InMemoryIdempotencyStore(sp.GetRequiredService<IOptions<KafkaOptions>>().Value.IdempotencyMaxEntries));
+{
+    var kafka = sp.GetRequiredService<IOptions<KafkaOptions>>().Value;
+    return kafka.IdempotencyStore switch
+    {
+        IdempotencyStoreKind.RocksDb => new RocksDbIdempotencyStore(
+            string.IsNullOrWhiteSpace(kafka.IdempotencyStorePath)
+                ? RocksDbIdempotencyStore.DefaultPath
+                : kafka.IdempotencyStorePath,
+            kafka.IdempotencyMaxEntries),
+        _ => new InMemoryIdempotencyStore(kafka.IdempotencyMaxEntries)
+    };
+});
 builder.Services.AddSingleton<IPrimeProcessor, PrimeProcessor>();
 builder.Services.AddHostedService<ConsumerWorker>();
 builder.Services.AddStaticSchemaVersioning();
