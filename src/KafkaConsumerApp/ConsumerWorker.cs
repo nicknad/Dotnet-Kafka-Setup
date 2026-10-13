@@ -32,7 +32,8 @@ internal sealed class ConsumerWorker(
             BootstrapServers = kafka.BootstrapServers,
             GroupId = kafka.ConsumerGroup,
             AutoOffsetReset = AutoOffsetReset.Earliest,
-            EnableAutoCommit = false
+            EnableAutoCommit = false,
+            StatisticsIntervalMs = KafkaClients.StatisticsIntervalMs
         };
 
         var deadLetterTopic = string.IsNullOrWhiteSpace(kafka.DeadLetterTopic)
@@ -46,11 +47,13 @@ internal sealed class ConsumerWorker(
         using var producer = new ProducerBuilder<Null, byte[]>(KafkaClients.IdempotentProducerConfig(kafka.BootstrapServers))
             .SetValueSerializer(Serializers.ByteArray)
             .SetErrorHandler((_, error) => logger.LogKafkaError(error))
+            .SetStatisticsHandler((_, statistics) => logger.LogKafkaStatistics(statistics))
             .Build();
 
         using var consumer = new ConsumerBuilder<Ignore, byte[]>(consumerConfig)
             .SetValueDeserializer(Deserializers.ByteArray)
             .SetErrorHandler((_, error) => logger.LogKafkaError(error))
+            .SetStatisticsHandler((_, statistics) => logger.LogKafkaStatistics(statistics))
             .SetPartitionsAssignedHandler((_, partitions) => logger.LogInformation(
                 "Assigned partitions: {Partitions}",
                 string.Join(", ", partitions.Select(partition => partition.Partition.Value))))
@@ -101,6 +104,7 @@ internal sealed class ConsumerWorker(
 
                 if (result.Message.Value is null)
                 {
+                    KafkaMetrics.RecordConsume(kafka.Topic, "tombstone");
                     logger.LogWarning("Skipping tombstone at {TopicPartitionOffset}", result.TopicPartitionOffset);
                 }
                 else if (ProtobufMessageParser.TryParse<PrimeNumber>(result.Message.Value, out var prime, out var reason))
@@ -108,6 +112,7 @@ internal sealed class ConsumerWorker(
                     try
                     {
                         Process(result, prime, kafka.Topic);
+                        KafkaMetrics.RecordConsume(kafka.Topic, "ok");
                     }
                     catch (Exception exception) when (exception is not OperationCanceledException)
                     {
@@ -135,6 +140,7 @@ internal sealed class ConsumerWorker(
                 }
                 else
                 {
+                    KafkaMetrics.RecordConsume(kafka.Topic, "malformed");
                     await PublishToDeadLetterAsync(producer, deadLetterTopic, result, reason, stoppingToken);
                 }
 
@@ -192,6 +198,7 @@ internal sealed class ConsumerWorker(
         try
         {
             await producer.ProduceAsync(deadLetterTopic, message, cancellationToken);
+            KafkaMetrics.RecordDeadLetter(result.Topic, deadLetterTopic);
             logger.LogError(
                 "Dead-lettered malformed message from {TopicPartitionOffset} to {DeadLetterTopic}: {Reason}",
                 result.TopicPartitionOffset,
@@ -300,12 +307,13 @@ internal sealed class ConsumerWorker(
         }
 
         var offsets = _commitTracker.GetOffsetsToCommit();
-
+        var started = Stopwatch.GetTimestamp();
         for (var attempt = 1; ; attempt++)
         {
             try
             {
                 consumer.Commit(offsets);
+                KafkaMetrics.RecordCommit(Stopwatch.GetElapsedTime(started).TotalMilliseconds, "ok");
                 logger.LogDebug(
                     "Committed {Count} partition offset(s): {Offsets}",
                     offsets.Count,
@@ -333,6 +341,7 @@ internal sealed class ConsumerWorker(
             }
             catch (KafkaException exception)
             {
+                KafkaMetrics.RecordCommit(Stopwatch.GetElapsedTime(started).TotalMilliseconds, "error");
                 logger.LogError(
                     exception,
                     "Failed to commit {Count} partition offset(s) ({Offsets}); those offsets will be reprocessed",
@@ -352,12 +361,14 @@ internal sealed class ConsumerWorker(
         }
 
         var offsets = _commitTracker.GetOffsetsToCommit();
+        var started = Stopwatch.GetTimestamp();
 
         for (var attempt = 1; ; attempt++)
         {
             try
             {
                 consumer.Commit(offsets);
+                KafkaMetrics.RecordCommit(Stopwatch.GetElapsedTime(started).TotalMilliseconds, "ok");
                 logger.LogDebug(
                     "Committed {Count} partition offset(s): {Offsets}",
                     offsets.Count,
@@ -385,6 +396,7 @@ internal sealed class ConsumerWorker(
             }
             catch (KafkaException exception)
             {
+                KafkaMetrics.RecordCommit(Stopwatch.GetElapsedTime(started).TotalMilliseconds, "error");
                 logger.LogError(
                     exception,
                     "Failed to commit {Count} partition offset(s) ({Offsets}); those offsets will be reprocessed",
