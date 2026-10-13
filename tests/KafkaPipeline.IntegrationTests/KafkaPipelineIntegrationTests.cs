@@ -142,10 +142,18 @@ public sealed class KafkaPipelineIntegrationTests
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
-            var result = consumer.Consume(TimeSpan.FromSeconds(2));
-            if (result is not null)
+            try
             {
-                return result;
+                var result = consumer.Consume(TimeSpan.FromSeconds(2));
+                if (result is not null)
+                {
+                    return result;
+                }
+            }
+            catch (ConsumeException exception) when (!exception.Error.IsFatal)
+            {
+                // The topic may not exist yet (it is auto-created by the first produce) or the
+                // group may still be joining; keep polling until the deadline.
             }
         }
 
