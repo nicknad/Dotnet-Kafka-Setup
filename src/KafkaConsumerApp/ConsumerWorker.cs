@@ -14,6 +14,7 @@ namespace KafkaConsumerApp;
 
 internal sealed class ConsumerWorker(
     IOptions<KafkaOptions> options,
+    IPrimeProcessor primeProcessor,
     ILogger<ConsumerWorker> logger) : BackgroundService
 {
     private const int CommitRetryCount = 3;
@@ -181,6 +182,15 @@ internal sealed class ConsumerWorker(
         activity?.SetTag("messaging.kafka.partition", result.Partition.Value);
         activity?.SetTag("messaging.kafka.offset", result.Offset.Value);
         activity?.SetTag("prime.value", prime.Value);
+
+        if (primeProcessor.Process(result.TopicPartitionOffset, prime) == PrimeProcessOutcome.AlreadySeen)
+        {
+            logger.LogDebug(
+                "Skipping duplicate prime {Prime} at {TopicPartitionOffset}",
+                prime.Value,
+                result.TopicPartitionOffset);
+            return;
+        }
 
         logger.LogInformation(
             "Consumed prime {Prime} from {Topic} partition {Partition} at offset {Offset}",
