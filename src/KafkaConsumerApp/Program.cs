@@ -28,5 +28,6 @@ builder.Services.AddSingleton<IIdempotencyStore>(sp =>
     new InMemoryIdempotencyStore(sp.GetRequiredService<IOptions<KafkaOptions>>().Value.IdempotencyMaxEntries));
 builder.Services.AddSingleton<IPrimeProcessor, PrimeProcessor>();
 builder.Services.AddHostedService<ConsumerWorker>();
+builder.Services.AddStaticSchemaVersioning();
 
 await builder.Build().RunAsync();

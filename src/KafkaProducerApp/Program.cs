@@ -1,4 +1,5 @@
 ﻿using KafkaPipeline.Core.Hosting;
+using KafkaPipeline.Core.Messaging;
 using KafkaPipeline.Core.Observability;
 using KafkaProducerApp;
 using Microsoft.Extensions.DependencyInjection;
@@ -16,5 +17,6 @@ builder
     .ValidateOnStart();
 
 builder.Services.AddHostedService<ProducerWorker>();
+builder.Services.AddStaticSchemaVersioning();
 
 await builder.Build().RunAsync();

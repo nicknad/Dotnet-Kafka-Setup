@@ -13,6 +13,7 @@ namespace KafkaProducerApp;
 
 internal sealed class ProducerWorker(
     IOptions<KafkaOptions> options,
+    ISchemaVersionProvider schemaVersions,
     ILogger<ProducerWorker> logger) : BackgroundService
 {
     private const int MaxCandidate = 10_000;
@@ -66,6 +67,7 @@ internal sealed class ProducerWorker(
 
         var headers = new Headers();
         KafkaTraceContext.Inject(activity, headers);
+        MessageEnvelope.ApplyTo(headers, schemaVersions.CurrentVersion, nameof(PrimeNumber));
 
         var message = new Message<Null, PrimeNumber>
         {

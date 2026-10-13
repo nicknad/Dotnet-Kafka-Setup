@@ -15,6 +15,7 @@ namespace KafkaConsumerApp;
 internal sealed class ConsumerWorker(
     IOptions<KafkaOptions> options,
     IPrimeProcessor primeProcessor,
+    ISchemaVersionProvider schemaVersions,
     ILogger<ConsumerWorker> logger) : BackgroundService
 {
     private const int CommitRetryCount = 3;
@@ -107,7 +108,12 @@ internal sealed class ConsumerWorker(
                     KafkaMetrics.RecordConsume(kafka.Topic, "tombstone");
                     logger.LogWarning("Skipping tombstone at {TopicPartitionOffset}", result.TopicPartitionOffset);
                 }
-                else if (ProtobufMessageParser.TryParse<PrimeNumber>(result.Message.Value, out var prime, out var reason))
+                else if (ProtobufMessageParser.TryParse<PrimeNumber>(
+                    result.Message.Value,
+                    result.Message.Headers,
+                    schemaVersions,
+                    out var prime,
+                    out var reason))
                 {
                     try
                     {
