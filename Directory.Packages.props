@@ -7,11 +7,11 @@
         <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.13" />
         <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" />
         <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.13" />
-        <PackageVersion Include="OpenTelemetry" Version="1.20.0" />
-        <PackageVersion Include="OpenTelemetry.Exporter.Console" Version="1.20.0" />
-        <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.20.0" />
-        <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.20.0" />
-        <PackageVersion Include="RocksDB" Version="11.8.1.6589" />
+        <PackageVersion Include="OpenTelemetry" Version="1.20.1" />
+        <PackageVersion Include="OpenTelemetry.Exporter.Console" Version="1.20.1" />
+        <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.20.1" />
+        <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.20.1" />
+        <PackageVersion Include="RocksDB" Version="11.8.1.7098" />
         <PackageVersion Include="Serilog" Version="4.4.0" />
         <PackageVersion Include="Serilog.Extensions.Hosting" Version="10.0.0" />
         <PackageVersion Include="Serilog.Sinks.Console" Version="6.1.1" />
