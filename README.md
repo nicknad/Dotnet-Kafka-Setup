@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/nicknad/Dotnet-Kafka-Setup/actions/workflows/ci.yml/badge.svg)](https://github.com/nicknad/Dotnet-Kafka-Setup/actions/workflows/ci.yml)
 
-A production-shaped Kafka pipeline on .NET 10 (Confluent.Kafka, Protobuf, OpenTelemetry, Serilog,
-Generic Host). The producer publishes protobuf-encoded primes below 10,000 to `primes-topic`; the
-consumer processes them with batched manual commits, durable idempotency, retry-with-backoff,
+A production-shaped Kafka pipeline on .NET 11 (C# 15, Confluent.Kafka, Protobuf, OpenTelemetry,
+Serilog, Generic Host). The producer publishes protobuf-encoded primes below 10,000 to `primes-topic`;
+the consumer processes them with batched manual commits, durable idempotency, retry-with-backoff,
 dead-lettering, and trace/metric export.
 
 ## Features
@@ -36,7 +36,7 @@ flowchart LR
 
 ## Prerequisites
 
-- [.NET SDK 10](https://dotnet.microsoft.com/download) (local runs/tests)
+- [.NET SDK 11](https://dotnet.microsoft.com/download) (local runs/tests; pinned in `global.json`)
 - [Docker](https://docs.docker.com/get-docker/) with Compose v2
 
 ## Quick start
@@ -115,6 +115,24 @@ inert and its tests are skipped.
   processes — the same broker serves both without code changes.
 - **Trace context in headers**: W3C `traceparent` is injected/extracted manually, keeping the pipeline
   traceable end to end without a broker plugin.
+
+## .NET 11 notes
+
+The solution targets `net11.0` (C# 15) and the container images are the .NET 11 runtime/SDK. The SDK
+is pinned in [`global.json`](global.json) and CI builds and tests on `11.0.x`.
+
+- **Worker failures now fail fast**: an exception escaping `BackgroundService.ExecuteAsync()` stops the
+  host instead of being swallowed, so an unrecoverable Kafka or dead-letter produce error exits
+  non-zero and Compose restarts the consumer. Both workers log the failure at critical level before the
+  exception surfaces, which keeps the "stop rather than skip the message" guarantee visible.
+- **CPU baseline**: .NET 11 requires x86-64-v2 (SSE3/SSSE3/SSE4.1/SSE4.2, POPCNT, CMPXCHG16B) on
+  x86/x64 and LSE on Windows Arm64. Any CPU from roughly 2013 onward qualifies; older hosts print
+  "The current CPU is missing one or more of the baseline instruction sets."
+- **ReadyToRun moved to x86-64-v3** on Windows and Linux, so R2R-published builds start faster on AVX2
+  hardware and fall back to JIT on older supported CPUs.
+
+The remaining .NET 11 breaking changes were reviewed and do not apply here: no compression/TAR/ZIP,
+named pipes, DSA, EF Core, Microsoft.Data.SqlClient, ASP.NET Core, or NativeAOT usage.
 
 ## Supply chain
 
