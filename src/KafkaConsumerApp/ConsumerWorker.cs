@@ -166,6 +166,12 @@ internal sealed class ConsumerWorker(
         {
             logger.LogInformation("Shutdown requested");
         }
+        catch (Exception exception)
+        {
+            // .NET 11 lets an escaping exception stop the host; log it before it surfaces.
+            logger.LogCritical(exception, "Consumer failed; stopping the host");
+            throw;
+        }
         finally
         {
             CommitProcessed(consumer, stoppingToken);

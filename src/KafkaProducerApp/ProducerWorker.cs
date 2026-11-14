@@ -49,6 +49,12 @@ internal sealed class ProducerWorker(
         {
             logger.LogInformation("Shutdown requested");
         }
+        catch (Exception exception)
+        {
+            // .NET 11 lets an escaping exception stop the host; log it before it surfaces.
+            logger.LogCritical(exception, "Producer failed; stopping the host");
+            throw;
+        }
         finally
         {
             producer.Flush(TimeSpan.FromSeconds(5));
