@@ -4,7 +4,7 @@ WORKDIR /app
 RUN mkdir -p /data/idempotency && chown -R $APP_UID:$APP_UID /data
 USER $APP_UID
 
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:11.0 AS build
 ARG APP
 WORKDIR /src
 COPY Directory.Build.props Directory.Packages.props ./
