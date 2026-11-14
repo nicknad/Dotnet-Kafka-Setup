@@ -34,6 +34,57 @@ flowchart LR
     C -->|malformed / retries exhausted| DL[(primes-topic.dlq)]
 ```
 
+## Message lifecycle
+
+One message through the consumer. `mayBreak` marks the only rule below that a bounded
+[TLA+](https://lamport.azurewebsites.net/tla/tla.html) model check shows can break — see
+[Known limitations](#known-limitations).
+
+```mermaid
+stateDiagram-v2
+    [*] --> Waiting
+
+    Waiting --> Inspecting: the consumer reads the message
+    Inspecting --> Processing: the payload parses
+    Inspecting --> Skipped: the message has no payload
+    Inspecting --> Skipped: this copy was already processed
+    Inspecting --> DeadLettering: the payload does not parse [on a retry copy]
+    Inspecting --> DeadLettering: the payload does not parse [on the first copy]
+
+    Processing --> Processed: the work succeeds
+    Processing --> RetryPublishing: the work fails [attempts remain]
+    Processing --> DeadLettering: the work fails [no retries left]
+
+    RetryPublishing --> Waiting: the broker accepts the retry copy
+    RetryPublishing --> Stopped: the broker rejects the retry copy
+
+    DeadLettering --> DeadLettered: the broker accepts the dead-letter copy
+    DeadLettering --> Stopped: the broker rejects the dead-letter copy
+
+    Processed --> Committed: the batch commits
+    Skipped --> Committed: the batch commits
+    DeadLettered --> Committed: the batch commits
+
+    Committed --> [*]
+    Stopped --> Waiting: the process restarts [the copy was never committed]
+
+    classDef mayBreak fill:#78350f,stroke:#fcd34d,color:#fff
+    class DeadLettering mayBreak
+```
+
+| # | Rule | Holds |
+| --- | --- | --- |
+| R1 | An offset is only committed for a message that was handled | yes |
+| R2 | A message joins a commit batch only once handled | yes |
+| R3 | A message is republished for retry at most `Kafka:MaxRetryAttempts` times | yes |
+| R4 | A payload is processed at most once, however often it is redelivered | yes |
+| R5 | A malformed payload is never processed | yes |
+| R6 | A dead-lettered message records the original message's coordinates | **no** — see below |
+
+The model is bounded: one logical message, `Kafka:MaxRetryAttempts` at most 2, no rebalance, no
+idempotency-store eviction, and a store that survives a restart (the in-memory store cannot). The
+hidden steps are offset bookkeeping — the commit itself and the `+1` next-offset tracking.
+
 ## Prerequisites
 
 - [.NET SDK 11](https://dotnet.microsoft.com/download) (local runs/tests; pinned in `global.json`)
@@ -115,6 +166,18 @@ inert and its tests are skipped.
   processes — the same broker serves both without code changes.
 - **Trace context in headers**: W3C `traceparent` is injected/extracted manually, keeping the pipeline
   traceable end to end without a broker plugin.
+
+## Known limitations
+
+- **A dead-lettered retry copy points at itself, not at the original message** (R6 above). A message
+  that exhausts its retries is dead-lettered *while being consumed from `<topic>.retry`*, and
+  [`PublishToDeadLetterAsync`](src/KafkaConsumerApp/ConsumerWorker.cs) writes `dlq.original.topic`,
+  `dlq.original.partition` and `dlq.original.offset` from the coordinates of the copy in hand
+  (`result.Topic`, `result.Partition`, `result.Offset`). For a retry copy those name the retry topic
+  and its offset, so the link back to the message that first failed is lost; only
+  `retry.first-timestamp`, `retry.last-error` and `retry.count` survive from the original. The
+  malformed-on-first-copy path is unaffected. The fix is to stamp the original coordinates onto the
+  retry headers when republishing and prefer them when dead-lettering.
 
 ## .NET 11 notes
 
